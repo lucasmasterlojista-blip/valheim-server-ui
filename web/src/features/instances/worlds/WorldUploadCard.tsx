@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Button, Checkbox, Group, List, SegmentedControl, Stack, Text } from '@mantine/core'
+import { Alert, Button, Checkbox, Group, List, SegmentedControl, Stack, Text } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import { IconUpload, IconX } from '@tabler/icons-react'
+import { ApiError } from '../../../api/client'
 import { SectionCard } from '../../../ui'
 import { notifyWarning } from '../../../lib/notify'
-import { useUploadWorlds } from './useWorlds'
+import { usePreviewWorldImport, useUploadWorlds } from './useWorlds'
 
 type UploadFormat = 'zip' | 'legacy'
 
@@ -19,15 +20,28 @@ export function WorldUploadCard({ id }: { id: string }) {
   const [files, setFiles] = useState<File[]>([])
   const [overwrite, setOverwrite] = useState(false)
   const upload = useUploadWorlds(id)
+  const preview = usePreviewWorldImport(id)
+  const pending = upload.isPending || preview.isPending
+  const details = preview.data
+  const previewError = preview.error instanceof ApiError
+    ? preview.error.fields[0]?.message ?? preview.error.message
+    : preview.error?.message
   const zip = format === 'zip'
   const matchingPair = files.length === 2 &&
     files[0].name.replace(LEGACY_SUFFIX, '') === files[1].name.replace(LEGACY_SUFFIX, '')
-  const canUpload = zip ? files.length === 1 : matchingPair
+  const hasFiles = zip ? files.length === 1 : matchingPair
+  const canUpload = hasFiles && !pending &&
+    !details?.requires_stop && (!details?.exists || overwrite)
+
+  function clearFiles() {
+    setFiles([])
+    setOverwrite(false)
+    preview.reset()
+  }
 
   function changeFormat(next: UploadFormat) {
     setFormat(next)
-    setFiles([])
-    setOverwrite(false)
+    clearFiles()
   }
 
   function warn(message: string) {
@@ -45,6 +59,8 @@ export function WorldUploadCard({ id }: { id: string }) {
         warn('Choose one ZIP archive containing the complete world folder.')
         return
       }
+      preview.reset()
+      setOverwrite(false)
       setFiles(dropped)
       return
     }
@@ -54,6 +70,8 @@ export function WorldUploadCard({ id }: { id: string }) {
       warn('Choose one .db file and one .fwl file for a legacy world.')
       return
     }
+    preview.reset()
+    setOverwrite(false)
     setFiles((previous) => [
       ...previous.filter((file) => !dropped.some((item) => extension(item) === extension(file))),
       ...dropped,
@@ -65,10 +83,7 @@ export function WorldUploadCard({ id }: { id: string }) {
     upload.mutate(
       { files, overwrite },
       {
-        onSuccess: () => {
-          setFiles([])
-          setOverwrite(false)
-        },
+        onSuccess: clearFiles,
       },
     )
   }
@@ -80,7 +95,7 @@ export function WorldUploadCard({ id }: { id: string }) {
           aria-label="World upload format"
           value={format}
           onChange={changeFormat}
-          disabled={upload.isPending}
+          disabled={pending}
           data={[
             { label: 'ZIP archive', value: 'zip' },
             { label: 'Legacy files', value: 'legacy' },
@@ -88,9 +103,9 @@ export function WorldUploadCard({ id }: { id: string }) {
         />
         <Dropzone
           onDrop={handleDrop}
-          onReject={() => warn('Choose one ZIP archive at a time.')}
+          onReject={zip ? () => warn('Choose one ZIP archive at a time.') : undefined}
           multiple={!zip}
-          disabled={upload.isPending}
+          disabled={pending}
           inputProps={{ 'aria-label': zip ? 'Choose a world ZIP archive' : 'Choose legacy world files' }}
         >
           <Group justify="center" gap="md" mih={100} style={{ pointerEvents: 'none' }}>
@@ -133,19 +148,31 @@ export function WorldUploadCard({ id }: { id: string }) {
           </Text>
         )}
 
+        {previewError && <Alert color="red" title="Could not preview world" role="alert">{previewError}</Alert>}
+        {details && (
+          <Alert color={details.exists || details.requires_stop ? 'yellow' : 'blue'} title={details.name} role="status">
+            <Text size="sm">{details.layout === 'directory' ? 'Valheim 1.0 world folder' : 'Legacy save'} · {details.file_count} files</Text>
+            {details.exists && <Text size="sm">A world with this name already exists.</Text>}
+            {details.requires_stop && <Text size="sm">Stop the instance before importing this world, then preview again.</Text>}
+          </Alert>
+        )}
+
         <Checkbox
           label="Overwrite existing world files with the same name"
           checked={overwrite}
           onChange={(e) => setOverwrite(e.currentTarget.checked)}
-          disabled={upload.isPending}
+          disabled={pending}
         />
 
         <Group justify="flex-end">
           {files.length > 0 && (
-            <Button variant="default" onClick={() => setFiles([])} disabled={upload.isPending}>
+            <Button variant="default" onClick={clearFiles} disabled={pending}>
               Clear
             </Button>
           )}
+          <Button variant="light" onClick={() => preview.mutate(files)} disabled={!hasFiles || pending} loading={preview.isPending}>
+            Preview
+          </Button>
           <Button onClick={submit} disabled={!canUpload} loading={upload.isPending}>
             Upload
           </Button>

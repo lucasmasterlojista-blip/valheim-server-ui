@@ -56,19 +56,17 @@ type stagedWorld struct {
 	DirFiles map[string]string
 }
 
-// tmpPaths lists every temp file the staged world owns.
-func (w stagedWorld) tmpPaths() []string {
-	out := make([]string, 0, 2+len(w.DirFiles))
+// cleanup removes only files owned by a staged import.
+func (w stagedWorld) cleanup() {
+	for _, path := range w.DirFiles {
+		_ = os.Remove(path)
+	}
 	if w.DB != "" {
-		out = append(out, w.DB)
+		_ = os.Remove(w.DB)
 	}
 	if w.FWL != "" {
-		out = append(out, w.FWL)
+		_ = os.Remove(w.FWL)
 	}
-	for _, p := range w.DirFiles {
-		out = append(out, p)
-	}
-	return out
 }
 
 // EnqueueWorldImport validates and stages the uploaded file(s) synchronously
@@ -81,82 +79,9 @@ func (s *Service) EnqueueWorldImport(ctx context.Context, instanceID string, fil
 	if _, err := s.inst.Get(ctx, instanceID); err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
-		return nil, domain.Validation([]domain.FieldError{{Field: "files", Message: "at least one file is required"}})
-	}
-
-	asZip := false
-	if len(files) == 1 {
-		for name := range files {
-			if strings.EqualFold(filepath.Ext(name), ".zip") {
-				asZip = true
-			}
-		}
-	}
-	if !asZip {
-		if err := validateWorldFilePair(files); err != nil {
-			return nil, err
-		}
-	}
-
-	stagingDir := filepath.Join(s.inst.Paths(instanceID).Save, ".staging")
-	if err := os.MkdirAll(stagingDir, 0o750); err != nil {
-		return nil, domain.Wrap(domain.CodeInternal, "create staging directory", err)
-	}
-
-	// Stage every input reader to a temp file first, regardless of shape.
-	type stagedInput struct{ origName, tmpPath string }
-	inputs := make([]stagedInput, 0, len(files))
-	cleanupInputs := func() {
-		for _, in := range inputs {
-			_ = os.Remove(in.tmpPath)
-		}
-	}
-	for name, r := range files {
-		base := filepath.Base(name)
-		tmp, err := os.CreateTemp(stagingDir, "upload-*")
-		if err != nil {
-			cleanupInputs()
-			return nil, domain.Wrap(domain.CodeInternal, "stage upload", err)
-		}
-		if _, err := io.Copy(tmp, r); err != nil { //nolint:gosec // uploaded world save file, no smaller bound is meaningful here
-			_ = tmp.Close()
-			cleanupInputs()
-			return nil, domain.Wrap(domain.CodeInternal, "stage upload", err)
-		}
-		if err := tmp.Close(); err != nil {
-			cleanupInputs()
-			return nil, domain.Wrap(domain.CodeInternal, "stage upload", err)
-		}
-		inputs = append(inputs, stagedInput{origName: base, tmpPath: tmp.Name()})
-	}
-
-	// Normalise up front: for a zip, extract (and fully validate) it right
-	// now so a bad archive is rejected synchronously instead of only failing
-	// the job later.
-	var staged stagedWorld
-	if asZip {
-		extracted, err := extractWorldZipToStaging(inputs[0].tmpPath, stagingDir)
-		_ = os.Remove(inputs[0].tmpPath)
-		if err != nil {
-			return nil, err
-		}
-		staged = extracted
-	} else {
-		for _, in := range inputs {
-			staged.Name = strings.TrimSuffix(in.origName, filepath.Ext(in.origName))
-			if strings.EqualFold(filepath.Ext(in.origName), ".db") {
-				staged.DB = in.tmpPath
-			} else {
-				staged.FWL = in.tmpPath
-			}
-		}
-	}
-
-	cleanup := func() {
-		for _, p := range staged.tmpPaths() {
-			_ = os.Remove(p)
-		}
+	staged, err := s.prepareWorldImport(instanceID, files, false)
+	if err != nil {
+		return nil, err
 	}
 	job, err := s.runner.Enqueue(ctx, jobs.Spec{
 		Type:        domain.JobWorldImport,
@@ -164,14 +89,115 @@ func (s *Service) EnqueueWorldImport(ctx context.Context, instanceID string, fil
 		Title:       "Import world",
 		RequestedBy: requestedBy,
 	}, func(ctx context.Context, log *jobs.Logger) error {
-		defer cleanup()
+		defer staged.cleanup()
 		return s.runWorldImport(ctx, instanceID, staged, overwrite, log)
 	})
 	if err != nil {
-		cleanup()
+		staged.cleanup()
 		return nil, err
 	}
 	return job, nil
+}
+
+// PreviewWorldImport checks the save layout without queuing a job or
+// touching world files. Import checks the contents again on submission.
+func (s *Service) PreviewWorldImport(ctx context.Context, instanceID string, files map[string]io.Reader) (domain.WorldImportPreview, error) {
+	inst, err := s.inst.Get(ctx, instanceID)
+	if err != nil {
+		return domain.WorldImportPreview{}, err
+	}
+	world, err := s.prepareWorldImport(instanceID, files, true)
+	if err != nil {
+		return domain.WorldImportPreview{}, err
+	}
+	if !validWorldName(world.Name) {
+		return domain.WorldImportPreview{}, domain.E(domain.CodeValidationFailed, "could not determine a valid world name")
+	}
+	exists, err := worldFilesExist(s.inst.Paths(instanceID).WorldsDir(), world.Name)
+	if err != nil {
+		return domain.WorldImportPreview{}, err
+	}
+	preview := domain.WorldImportPreview{
+		Name: world.Name, Layout: "legacy", FileCount: 2, Exists: exists,
+		RequiresStop: world.Name == inst.Config.World && isBusyState(inst.Status.State),
+	}
+	if len(world.DirFiles) > 0 {
+		preview.Layout = "directory"
+		preview.FileCount = len(world.DirFiles)
+	}
+	return preview, nil
+}
+
+// prepareWorldImport uses the same ZIP parser for preview and import. Preview
+// checks archive entries without expanding them or staging loose files.
+func (s *Service) prepareWorldImport(instanceID string, files map[string]io.Reader, preview bool) (stagedWorld, error) {
+	if len(files) == 0 {
+		return stagedWorld{}, domain.Validation([]domain.FieldError{{Field: "files", Message: "at least one file is required"}})
+	}
+	var zipFile io.Reader
+	for name, r := range files {
+		if len(files) == 1 && strings.EqualFold(filepath.Ext(name), ".zip") {
+			zipFile = r
+		}
+	}
+	if zipFile == nil {
+		if err := validateWorldFilePair(files); err != nil {
+			return stagedWorld{}, err
+		}
+	}
+	if preview && zipFile == nil {
+		for name := range files {
+			return stagedWorld{Name: strings.TrimSuffix(name, filepath.Ext(name))}, nil
+		}
+	}
+
+	stagingDir := filepath.Join(s.inst.Paths(instanceID).Save, ".staging")
+	if err := os.MkdirAll(stagingDir, 0o750); err != nil {
+		return stagedWorld{}, domain.Wrap(domain.CodeInternal, "create staging directory", err)
+	}
+	if zipFile != nil {
+		path, err := stageWorldFile(zipFile, stagingDir)
+		if err != nil {
+			return stagedWorld{}, err
+		}
+		defer func() { _ = os.Remove(path) }()
+		if preview {
+			return inspectWorldZip(path)
+		}
+		return extractWorldZipToStaging(path, stagingDir)
+	}
+	var staged stagedWorld
+	for name, r := range files {
+		path, err := stageWorldFile(r, stagingDir)
+		if err != nil {
+			staged.cleanup()
+			return stagedWorld{}, err
+		}
+		staged.Name = strings.TrimSuffix(name, filepath.Ext(name))
+		if strings.EqualFold(filepath.Ext(name), ".db") {
+			staged.DB = path
+		} else {
+			staged.FWL = path
+		}
+	}
+	return staged, nil
+}
+
+func stageWorldFile(r io.Reader, stagingDir string) (string, error) {
+	tmp, err := os.CreateTemp(stagingDir, "upload-*")
+	if err != nil {
+		return "", domain.Wrap(domain.CodeInternal, "stage upload", err)
+	}
+	_, copyErr := io.Copy(tmp, r) //nolint:gosec // upload requests have a body limit
+	closeErr := tmp.Close()
+	if copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		_ = os.Remove(tmp.Name())
+		return "", domain.Wrap(domain.CodeInternal, "stage upload", copyErr)
+	}
+	return tmp.Name(), nil
 }
 
 // validateWorldFilePair checks that files is exactly one matching .db+.fwl
@@ -208,18 +234,15 @@ func validateWorldFilePair(files map[string]io.Reader) error {
 }
 
 func worldFilesExist(worldsDir, world string) (bool, error) {
-	save, err := scanWorld(worldsDir, world)
+	names, err := worldSaveEntries(worldsDir, world)
 	if err != nil {
-		return false, domain.Wrap(domain.CodeInternal, "scan worlds", err)
+		return false, domain.Wrap(domain.CodeInternal, "inspect world files", err)
 	}
-	return save.exists(), nil
+	return len(names) > 0, nil
 }
 
-// runWorldImport writes the staged world -- a legacy .db+.fwl pair or a
-// Valheim 1.0 directory, normalised by EnqueueWorldImport whether the upload
-// was loose files or a zip -- into the instance's worlds_local directory.
-// With overwrite it replaces whatever exists for that name in either
-// layout, since Valheim would otherwise keep loading the newer of the two.
+// runWorldImport installs the prepared save while preserving the previous
+// layout until all replacement files and manager state have been committed.
 func (s *Service) runWorldImport(ctx context.Context, instanceID string, staged stagedWorld, overwrite bool, log *jobs.Logger) error {
 	inst, err := s.inst.Get(ctx, instanceID)
 	if err != nil {
@@ -227,96 +250,71 @@ func (s *Service) runWorldImport(ctx context.Context, instanceID string, staged 
 	}
 	worldsDir := s.inst.Paths(instanceID).WorldsDir()
 	world := staged.Name
-	if world == "" || !validWorldName(world) {
+	if !validWorldName(world) {
 		return domain.Validation([]domain.FieldError{{Field: "files", Message: "could not determine a valid world name"}})
 	}
-
-	exists, err := worldFilesExist(worldsDir, world)
-	if err != nil {
-		return err
-	}
-	if exists && !overwrite {
-		return domain.Ef(domain.CodeConflict, "world %q already exists", world)
-	}
-	isActive := world == inst.Config.World
-	if isActive && isBusyState(inst.Status.State) {
+	if world == inst.Config.World && isBusyState(inst.Status.State) {
 		return domain.Ef(domain.CodeInstanceRunning, "cannot overwrite the active world %q while running", world)
 	}
 
 	if err := os.MkdirAll(worldsDir, 0o750); err != nil {
 		return domain.Wrap(domain.CodeInternal, "create worlds directory", err)
 	}
-	if exists {
-		if _, err := removeWorldSave(worldsDir, world); err != nil {
-			return err
-		}
+	workDir, err := os.MkdirTemp(worldsDir, ".world-import-")
+	if err != nil {
+		return domain.Wrap(domain.CodeInternal, "create world import directory", err)
 	}
-	if len(staged.DirFiles) > 0 {
-		dir := filepath.Join(worldsDir, world)
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return domain.Wrap(domain.CodeInternal, "create world directory", err)
-		}
-		for base, src := range staged.DirFiles {
-			if err := atomicMove(src, filepath.Join(dir, base)); err != nil {
-				return err
+	retain := false
+	defer func() {
+		if !retain {
+			if err := os.RemoveAll(workDir); err != nil {
+				s.log.Warn("remove world import directory", "path", workDir, "err", err)
 			}
 		}
-	} else {
-		if err := atomicMove(staged.DB, filepath.Join(worldsDir, world+".db")); err != nil {
-			return err
+	}()
+
+	names, err := prepareWorldInstall(ctx, filepath.Join(workDir, "incoming"), staged)
+	if err != nil {
+		return domain.Wrap(domain.CodeInternal, "prepare world import", err)
+	}
+
+	// The job queue serializes imports for this instance, but the server may
+	// have started while a large save was being prepared. Re-check before
+	// changing anything in worlds_local.
+	inst, err = s.inst.Get(ctx, instanceID)
+	if err != nil {
+		return err
+	}
+	isActive := world == inst.Config.World
+	if isActive && isBusyState(inst.Status.State) {
+		return domain.Ef(domain.CodeInstanceRunning, "cannot overwrite the active world %q while running", world)
+	}
+	originals, err := worldSaveEntries(worldsDir, world)
+	if err != nil {
+		return domain.Wrap(domain.CodeInternal, "inspect world files", err)
+	}
+	if len(originals) > 0 {
+		if !overwrite {
+			return domain.Ef(domain.CodeConflict, "world %q already exists", world)
 		}
-		if err := atomicMove(staged.FWL, filepath.Join(worldsDir, world+".fwl")); err != nil {
-			return err
+		log.Printf("replacing world %q (recovery directory: %s)", world, workDir)
+	}
+
+	retain, err = swapWorldSave(ctx, worldsDir, workDir, originals, names, func() error {
+		if isActive {
+			return s.inst.MarkPendingRestart(ctx, instanceID)
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	log.Printf("imported world %q", world)
 	log.SetSummary("world", world)
-
-	if isActive {
-		if err := s.inst.MarkPendingRestart(ctx, instanceID); err != nil {
-			return err
-		}
-	}
 	if err := s.inst.PublishStatus(ctx, instanceID); err != nil {
 		s.log.Warn("backup: publish status after world import", "instance", instanceID, "err", err)
 	}
-	return nil
-}
-
-// atomicMove moves src to dst, falling back to copy+remove if they are on
-// different filesystems.
-func atomicMove(src, dst string) error {
-	if src == "" {
-		return domain.E(domain.CodeInternal, "missing staged file")
-	}
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	in, err := os.Open(src) //nolint:gosec // src is a temp file this service just staged
-	if err != nil {
-		return domain.Wrap(domain.CodeInternal, "open staged file", err)
-	}
-	defer func() { _ = in.Close() }()
-	tmp := dst + ".tmp"
-	out, err := os.Create(tmp) //nolint:gosec // dst is derived from InstancePaths + a validated world name
-	if err != nil {
-		return domain.Wrap(domain.CodeInternal, "create target file", err)
-	}
-	if _, err := io.Copy(out, in); err != nil { //nolint:gosec // staged world save file, size bounded by the original upload
-		_ = out.Close()
-		_ = os.Remove(tmp)
-		return domain.Wrap(domain.CodeInternal, "copy staged file", err)
-	}
-	if err := out.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return domain.Wrap(domain.CodeInternal, "close target file", err)
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
-		return domain.Wrap(domain.CodeInternal, "finalize target file", err)
-	}
-	_ = os.Remove(src)
 	return nil
 }
 

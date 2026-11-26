@@ -849,6 +849,36 @@ paths:
         '202': { $ref: '#/components/responses/JobResponse' }
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
+  /instances/{instanceId}/worlds/preview:
+    post:
+      tags: [worlds]
+      operationId: previewWorldImport
+      summary: Check a proposed world import without changing the save
+      description: >
+        Checks the same world layout and required filenames as import. The
+        preview does not extract archive contents or queue a job. Import
+        requires a separate upload. It reads archive data and rechecks the destination.
+      x-role: operator
+      parameters: [{ $ref: '#/components/parameters/instanceId' }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files: { type: array, items: { type: string, format: binary } }
+      responses:
+        '200':
+          description: World name, layout and current destination status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorldImportPreview' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /instances/{instanceId}/worlds/{worldName}:
     parameters:
       - { $ref: '#/components/parameters/instanceId' }
@@ -1549,6 +1579,37 @@ paths:
               schema: { type: string }
           content:
             application/zip: { schema: { type: string, format: binary } }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /instances/{instanceId}/mods/compare:
+    post:
+      tags: [mods]
+      operationId: compareModProfile
+      summary: Compare an exported client profile with the installed Thunderstore mods
+      description: >
+        Reads export.r2x from a local .r2z or .zip profile archive up to 8 MiB.
+        The profile entry is limited to 1 MiB uncompressed. Configuration files
+        and unsupported providers are ignored. No mods or configuration change.
+      x-role: operator
+      parameters: [{ $ref: '#/components/parameters/instanceId' }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Read-only comparison of versions and enabled states
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModProfileComparison' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
 
@@ -2346,6 +2407,15 @@ components:
         has_db: { type: boolean }
         has_fwl: { type: boolean }
 
+    WorldImportPreview:
+      type: object
+      required: [name, layout, file_count, exists, requires_stop]
+      properties:
+        name: { type: string }
+        layout: { type: string, enum: [directory, legacy] }
+        file_count: { type: integer }
+        exists: { type: boolean }
+        requires_stop: { type: boolean, description: True when this is the active world and the instance must stop before importing }
     GameBackup:
       type: object
       description: One of Valheim's own rolling world copies in save/worlds_local.
@@ -2443,6 +2513,32 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
+
+    ModProfileComparison:
+      type: object
+      required: [profile_name, matched, differences, skipped_server_mods, skipped_profile_mods]
+      properties:
+        profile_name: { type: string }
+        matched: { type: integer }
+        differences: { type: array, items: { $ref: '#/components/schemas/ModProfileDifference' } }
+        skipped_server_mods: { type: array, items: { type: string } }
+        skipped_profile_mods: { type: array, items: { type: string } }
+    ModProfileDifference:
+      type: object
+      required: [name, reasons]
+      properties:
+        name: { type: string }
+        reasons:
+          type: array
+          items: { type: string, enum: [missing_on_server, only_on_server, version, enabled] }
+        profile: { $ref: '#/components/schemas/ModProfileEntry' }
+        server: { $ref: '#/components/schemas/ModProfileEntry' }
+    ModProfileEntry:
+      type: object
+      required: [version, enabled]
+      properties:
+        version: { type: string }
+        enabled: { type: boolean }
 
     Mod:
       type: object

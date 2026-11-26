@@ -8,6 +8,7 @@ import { useAuth } from '../../auth/useAuth'
 import { GameplayCard } from '../gameplay'
 import {
   CheckModUpdatesButton,
+  CompareModProfileCard,
   ConfigEditor,
   InstalledModsTable,
   ModLoaderCard,
@@ -46,7 +47,12 @@ export function ModsTab({ id }: { id: string }) {
         }
       />
 
-      {hasRole('operator') && <UploadModCard id={id} />}
+      {hasRole('operator') && (
+        <>
+          <CompareModProfileCard key={id} id={id} />
+          <UploadModCard id={id} />
+        </>
+      )}
 
       <ConfigEditor id={id} />
 

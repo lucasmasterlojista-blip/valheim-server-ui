@@ -2005,6 +2005,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instances/{instanceId}/worlds/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a proposed world import without changing the save
+         * @description Checks the same world layout and required filenames as import. The preview does not extract archive contents or queue a job. Import requires a separate upload. It reads archive data and rechecks the destination.
+         */
+        post: operations["previewWorldImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/instances/{instanceId}/worlds/{worldName}": {
         parameters: {
             query?: never;
@@ -3671,6 +3691,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instances/{instanceId}/mods/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compare an exported client profile with the installed Thunderstore mods
+         * @description Reads export.r2x from a local .r2z or .zip profile archive up to 8 MiB. The profile entry is limited to 1 MiB uncompressed. Configuration files and unsupported providers are ignored. No mods or configuration change.
+         */
+        post: operations["compareModProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/thunderstore/registries": {
         parameters: {
             query?: never;
@@ -4632,6 +4672,15 @@ export interface components {
             has_db?: boolean;
             has_fwl?: boolean;
         };
+        WorldImportPreview: {
+            name: string;
+            /** @enum {string} */
+            layout: "directory" | "legacy";
+            file_count: number;
+            exists: boolean;
+            /** @description True when this is the active world and the instance must stop before importing */
+            requires_stop: boolean;
+        };
         /** @description One of Valheim's own rolling world copies in save/worlds_local. */
         GameBackup: {
             /** @description File stem or directory name, e.g. Midgard_backup_auto-20260909144803; the id for the restore call */
@@ -4733,6 +4782,23 @@ export interface components {
         Registry: {
             id: string;
             name: string;
+        };
+        ModProfileComparison: {
+            profile_name: string;
+            matched: number;
+            differences: components["schemas"]["ModProfileDifference"][];
+            skipped_server_mods: string[];
+            skipped_profile_mods: string[];
+        };
+        ModProfileDifference: {
+            name: string;
+            reasons: ("missing_on_server" | "only_on_server" | "version" | "enabled")[];
+            profile?: components["schemas"]["ModProfileEntry"];
+            server?: components["schemas"]["ModProfileEntry"];
+        };
+        ModProfileEntry: {
+            version: string;
+            enabled: boolean;
         };
         Mod: {
             id: number;
@@ -5309,6 +5375,38 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    previewWorldImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["instanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    files: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description World name, layout and current destination status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorldImportPreview"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
     exportModProfile: {
         parameters: {
             query: {
@@ -5334,6 +5432,39 @@ export interface operations {
                     "application/zip": string;
                 };
             };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    compareModProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["instanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Read-only comparison of versions and enabled states */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModProfileComparison"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };

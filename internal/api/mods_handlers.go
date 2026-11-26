@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,8 @@ func registerModRoutes(r chi.Router, d *Deps) {
 		Post("/instances/{instanceId}/mods/upload", uploadModHandler(d))
 	r.With(RequireRole(domain.RoleViewer), guard).
 		Get("/instances/{instanceId}/mods/export", exportModProfileHandler(d))
+	r.With(RequireRole(domain.RoleOperator), guard).
+		Post("/instances/{instanceId}/mods/compare", compareModProfileHandler(d))
 
 	r.With(RequireRole(domain.RoleOperator), guard).
 		Post("/instances/{instanceId}/mods/bepinex", installBepInExHandler(d))
@@ -139,6 +142,45 @@ func uploadModHandler(d *Deps) http.HandlerFunc {
 		}
 		d.audit(r, "mods.upload", id, job.ID, map[string]any{"filename": header.Filename})
 		WriteJSON(w, http.StatusAccepted, map[string]any{"job": job})
+	}
+}
+
+func compareModProfileHandler(d *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := InstanceID(r)
+		if err != nil {
+			WriteError(w, err)
+			return
+		}
+		// The service bounds the ZIP itself to 8 MiB. Allow multipart overhead.
+		r.Body = http.MaxBytesReader(w, r.Body, 9<<20)
+		if err := r.ParseMultipartForm(1 << 20); err != nil { //nolint:gosec // bounded by MaxBytesReader above
+			WriteValidation(w, domain.FieldError{Field: "file", Message: "invalid multipart form or mod profile ZIP exceeds 8 MiB"})
+			return
+		}
+		defer func() { _ = r.MultipartForm.RemoveAll() }()
+		files := r.MultipartForm.File["file"]
+		if len(files) != 1 {
+			WriteValidation(w, domain.FieldError{Field: "file", Message: "choose one mod profile ZIP"})
+			return
+		}
+		ext := strings.ToLower(filepath.Ext(files[0].Filename))
+		if ext != ".r2z" && ext != ".zip" {
+			WriteValidation(w, domain.FieldError{Field: "file", Message: "choose a .r2z or .zip profile export"})
+			return
+		}
+		file, err := files[0].Open()
+		if err != nil {
+			WriteError(w, domain.Wrap(domain.CodeValidationFailed, "read mod profile", err))
+			return
+		}
+		defer func() { _ = file.Close() }()
+		result, err := d.Mods.CompareProfile(r.Context(), id, file)
+		if err != nil {
+			WriteError(w, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, result)
 	}
 }
 

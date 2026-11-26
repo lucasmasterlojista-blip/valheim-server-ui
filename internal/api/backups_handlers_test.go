@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jonasthim/valheim-server-ui/internal/backup"
@@ -525,5 +526,65 @@ func TestGameBackupHandlers_RoleGates(t *testing.T) {
 	}
 	if _, ok := api.audit.last(); ok {
 		t.Errorf("a forbidden restore must not be audited")
+	}
+}
+
+func TestWorldPreviewAPI(t *testing.T) {
+	a := newBackupTestAPI(t)
+	paths := a.createInstance(t, "main", "Existing", 2456)
+	const endpoint = "/api/v1/instances/main/worlds/preview"
+	for _, tc := range []struct {
+		name    string
+		entries map[string]string
+		want    domain.WorldImportPreview
+	}{
+		{
+			name: "new chunked world",
+			entries: map[string]string{
+				"worlds_local/New/_main.1.db2":      "db",
+				"worlds_local/New/_main.1.fwl2":     "fwl",
+				"worlds_local/New/_main.1.ok":       "",
+				"worlds_local/New/00_00__0_1.chunk": "chunk",
+			},
+			want: domain.WorldImportPreview{Name: "New", Layout: "directory", FileCount: 4},
+		},
+		{
+			name:    "existing legacy world",
+			entries: map[string]string{"Existing.db": "replacement", "Existing.fwl": "metadata"},
+			want:    domain.WorldImportPreview{Name: "Existing", Layout: "legacy", FileCount: 2, Exists: true},
+		},
+		{
+			name:    "missing required file",
+			entries: map[string]string{"Existing.db": "replacement"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, contentType := buildMultipartZip(t, "files", "arbitrary.zip", tc.entries)
+			rec := a.request(t, http.MethodPost, endpoint, body, contentType)
+			if tc.want.Name == "" {
+				if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "missing the .db or .fwl file") {
+					t.Fatalf("expected the missing-file error, got %d %s", rec.Code, rec.Body)
+				}
+				return
+			}
+			var got domain.WorldImportPreview
+			if rec.Code != http.StatusOK {
+				t.Fatalf("preview status = %d, body = %s", rec.Code, rec.Body)
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got != tc.want {
+				t.Fatalf("preview = %+v, error = %v, want %+v", got, err, tc.want)
+			}
+		})
+	}
+	saved, err := os.ReadFile(filepath.Join(paths.WorldsDir(), "Existing.db"))
+	if err != nil || string(saved) != "db-bytes" {
+		t.Fatalf("preview modified the original world: %q, %v", saved, err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.WorldsDir(), "New")); !os.IsNotExist(err) {
+		t.Fatalf("preview created a world: stat error = %v", err)
+	}
+	pending, err := os.ReadDir(filepath.Join(paths.Save, ".staging"))
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("preview left staged files: %v, %v", pending, err)
 	}
 }

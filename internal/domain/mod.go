@@ -70,6 +70,26 @@ type ModsOverview struct {
 	PendingRestart bool          `json:"pending_restart"`
 }
 
+type ModProfileEntry struct {
+	Version string `json:"version"`
+	Enabled bool   `json:"enabled"`
+}
+
+type ModProfileDifference struct {
+	Name    string           `json:"name"`
+	Reasons []string         `json:"reasons"`
+	Profile *ModProfileEntry `json:"profile,omitempty"`
+	Server  *ModProfileEntry `json:"server,omitempty"`
+}
+
+type ModProfileComparison struct {
+	ProfileName        string                 `json:"profile_name"`
+	Matched            int                    `json:"matched"`
+	Differences        []ModProfileDifference `json:"differences"`
+	SkippedProfileMods []string               `json:"skipped_profile_mods"`
+	SkippedServerMods  []string               `json:"skipped_server_mods"`
+}
+
 // ConfigFileFormat is the on-disk format of a mod config file.
 type ConfigFileFormat string
 

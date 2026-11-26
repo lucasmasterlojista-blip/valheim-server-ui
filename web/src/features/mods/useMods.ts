@@ -2,8 +2,8 @@
 // mods, Thunderstore install, uploads). Kept separate from components so the
 // barrel export doesn't trip oxlint's react/only-export-components rule.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '../../api/client'
-import type { Job, Mod, ModsOverview, StopIfRunning } from '../../api/types'
+import { api, ApiError } from '../../api/client'
+import type { Job, Mod, ModsOverview, Schemas, StopIfRunning } from '../../api/types'
 import { notifyError, notifySuccess } from '../../lib/notify'
 
 /** GET /instances/{id}/mods -> BepInEx status + installed mod list. */
@@ -145,5 +145,21 @@ export function useExportModProfile(id: string) {
       }
     },
     onError: (err) => notifyError(err, 'Could not export client profile'),
+  })
+}
+
+export function useCompareModProfile(id: string) {
+  return useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData()
+      form.set('file', file)
+      return api.upload<Schemas['ModProfileComparison']>(`/instances/${id}/mods/compare`, form)
+    },
+    onSuccess: () => notifySuccess('Client profile compared'),
+    onError: (err) => {
+      if (!(err instanceof ApiError) || !err.fieldErrors().file) {
+        notifyError(err, 'Could not compare client profile')
+      }
+    },
   })
 }

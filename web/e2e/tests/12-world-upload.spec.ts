@@ -39,13 +39,26 @@ test.describe.serial('world upload formats', () => {
     await expect(submit).toBeDisabled()
 
     await input.setInputFiles(fixture)
+    const saved = path.join(dataDir, 'instances', instance, 'save', 'worlds_local', 'ChunkedUpload')
+    const preview = page.getByRole('button', { name: 'Preview', exact: true })
+    await preview.click()
+    await expect(page.getByText('Valheim 1.0 world folder · 5 files')).toBeVisible()
+    expect(fs.existsSync(saved)).toBe(false)
     await expect(submit).toBeEnabled()
     await upload(page)
-    const saved = path.join(dataDir, 'instances', instance, 'save', 'worlds_local', 'ChunkedUpload')
     expect(fs.readFileSync(path.join(saved, '00_00__0_1.chunk'), 'utf8')).toBe('test chunk')
     expect(fs.existsSync(path.join(saved, '_main.1.ok'))).toBeTruthy()
     await page.reload()
     await expect(page.getByRole('cell', { name: 'ChunkedUpload', exact: true })).toBeVisible()
+
+    await input.setInputFiles(fixture)
+    await preview.click()
+    await expect(page.getByText('A world with this name already exists.')).toBeVisible()
+    await expect(submit).toBeDisabled()
+    await page.getByRole('checkbox', { name: /overwrite existing/i }).check()
+    await expect(submit).toBeEnabled()
+    await page.getByRole('button', { name: 'Clear', exact: true }).click()
+    await expect(page.getByText('A world with this name already exists.')).toHaveCount(0)
   })
 
   test('legacy mode waits for a matching pair and accepts files picked separately', async ({ page }) => {

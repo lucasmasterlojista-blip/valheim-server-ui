@@ -88,6 +88,15 @@ type World struct {
 	HasFWL     bool      `json:"has_fwl"`
 }
 
+// WorldImportPreview describes the proposed upload.
+type WorldImportPreview struct {
+	Name         string `json:"name"`
+	Layout       string `json:"layout"`
+	FileCount    int    `json:"file_count"`
+	Exists       bool   `json:"exists"`
+	RequiresStop bool   `json:"requires_stop"`
+}
+
 // GameBackup is one of Valheim's own rolling world copies
 // (<World>_backup_auto-<ts> and friends) found next to the worlds. Kind is
 // auto|cloud|restore, Layout is directory|legacy. Restorable is false when

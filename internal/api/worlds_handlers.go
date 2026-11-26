@@ -17,7 +17,8 @@ import (
 // (docs/openapi.yaml "worlds" tag, WP-06).
 func registerWorldRoutes(r chi.Router, d *Deps) {
 	r.With(RequireRole(domain.RoleViewer)).Get("/instances/{instanceId}/worlds", handleListWorlds(d))
-	r.With(RequireRole(domain.RoleOperator)).Post("/instances/{instanceId}/worlds", handleImportWorlds(d))
+	r.With(RequireRole(domain.RoleOperator)).Post("/instances/{instanceId}/worlds", handleWorldUpload(d, false))
+	r.With(RequireRole(domain.RoleOperator)).Post("/instances/{instanceId}/worlds/preview", handleWorldUpload(d, true))
 	r.With(RequireRole(domain.RoleOperator)).Delete("/instances/{instanceId}/worlds/{worldName}", handleDeleteWorld(d))
 	r.With(RequireRole(domain.RoleOperator)).Get("/instances/{instanceId}/worlds/{worldName}/download", handleExportWorld(d))
 	r.With(RequireRole(domain.RoleOperator)).Post("/instances/{instanceId}/worlds/{worldName}/regenerate", handleRegenerateWorld(d))
@@ -43,7 +44,7 @@ func handleListWorlds(d *Deps) http.HandlerFunc {
 	}
 }
 
-func handleImportWorlds(d *Deps) http.HandlerFunc {
+func handleWorldUpload(d *Deps, preview bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := InstanceID(r)
 		if err != nil {
@@ -77,14 +78,29 @@ func handleImportWorlds(d *Deps) http.HandlerFunc {
 			}
 		}()
 		for _, h := range headers {
+			name := filepath.Base(h.Filename)
+			if _, duplicate := files[name]; duplicate {
+				WriteValidation(w, domain.FieldError{Field: "files", Message: "duplicate filename " + name})
+				return
+			}
 			f, err := h.Open()
 			if err != nil {
 				WriteError(w, domain.Wrap(domain.CodeValidationFailed, "read uploaded file", err))
 				return
 			}
 			opened = append(opened, f)
-			files[filepath.Base(h.Filename)] = f
+			files[name] = f
 		}
+		if preview {
+			result, err := d.Backups.PreviewWorldImport(r.Context(), id, files)
+			if err != nil {
+				WriteError(w, err)
+				return
+			}
+			WriteJSON(w, http.StatusOK, result)
+			return
+		}
+
 		overwrite := r.FormValue("overwrite") == "true" || r.FormValue("overwrite") == "1"
 
 		job, err := d.Backups.EnqueueWorldImport(r.Context(), id, files, overwrite, RequestedBy(r))

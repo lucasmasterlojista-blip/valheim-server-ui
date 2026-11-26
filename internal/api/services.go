@@ -104,6 +104,7 @@ type BackupService interface {
 	Upload(ctx context.Context, instanceID, filename string, r io.Reader) (*domain.Backup, error)
 
 	ListWorlds(ctx context.Context, instanceID string) ([]domain.World, error)
+	PreviewWorldImport(ctx context.Context, instanceID string, files map[string]io.Reader) (domain.WorldImportPreview, error)
 	EnqueueWorldImport(ctx context.Context, instanceID string, files map[string]io.Reader, overwrite bool, requestedBy string) (*domain.Job, error)
 	DeleteWorld(ctx context.Context, instanceID, world string) error
 	// EnqueueWorldRegenerate backs up and deletes the ACTIVE world's files so
@@ -158,6 +159,7 @@ type ModService interface {
 	// skipped lists the FullName of every installed mod omitted from the
 	// profile (not from Thunderstore, or an unparseable version).
 	ExportProfile(ctx context.Context, instanceID string) ([]byte, []string, error)
+	CompareProfile(ctx context.Context, instanceID string, r io.Reader) (*domain.ModProfileComparison, error)
 }
 
 // WP-08

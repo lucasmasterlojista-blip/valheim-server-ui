@@ -415,25 +415,7 @@ func copyDeclared(dst io.Writer, src io.Reader, declared uint64) error {
 // committed generation. On any error every temp file it created is removed
 // before returning, so a caller never has to clean up a partial result.
 func extractWorldZipToStaging(zipPath, stagingDir string) (stagedWorld, error) {
-	zr, zerr := zip.OpenReader(zipPath)
-	if zerr != nil {
-		return stagedWorld{}, domain.E(domain.CodeValidationFailed, "not a valid zip file")
-	}
-	defer func() { _ = zr.Close() }()
-	if err := checkArchiveBudget(zr.File, maxArchiveUncompressedBytes); err != nil {
-		return stagedWorld{}, err
-	}
-
 	var created []string
-	cleanup := func() {
-		for _, p := range created {
-			_ = os.Remove(p)
-		}
-	}
-	fail := func(err error) (stagedWorld, error) {
-		cleanup()
-		return stagedWorld{}, err
-	}
 	stage := func(f *zip.File, pattern string) (string, error) {
 		out, err := os.CreateTemp(stagingDir, pattern)
 		if err != nil {
@@ -448,11 +430,40 @@ func extractWorldZipToStaging(zipPath, stagingDir string) (stagedWorld, error) {
 		return out.Name(), nil
 	}
 
+	world, err := readWorldZip(zipPath, stage)
+	if err != nil {
+		for _, path := range created {
+			_ = os.Remove(path)
+		}
+	}
+	return world, err
+}
+
+func inspectWorldZip(zipPath string) (stagedWorld, error) {
+	return readWorldZip(zipPath, func(f *zip.File, _ string) (string, error) {
+		return f.Name, nil
+	})
+}
+
+func readWorldZip(zipPath string, stage func(*zip.File, string) (string, error)) (stagedWorld, error) {
+	zr, zerr := zip.OpenReader(zipPath)
+	if zerr != nil {
+		return stagedWorld{}, domain.E(domain.CodeValidationFailed, "not a valid zip file")
+	}
+	defer func() { _ = zr.Close() }()
+	if err := checkArchiveBudget(zr.File, maxArchiveUncompressedBytes); err != nil {
+		return stagedWorld{}, err
+	}
+
+	return parseWorldZip(zr.File, stage)
+}
+
+func parseWorldZip(entries []*zip.File, stage func(*zip.File, string) (string, error)) (stagedWorld, error) {
 	type pair struct{ db, fwl string }
 	pairs := map[string]*pair{}
 	dirs := map[string]map[string]string{}
 	committed := map[string]map[int][3]bool{} // world -> gen -> {ok, db2, fwl2}
-	for _, f := range zr.File {
+	for _, f := range entries {
 		if f.FileInfo().IsDir() {
 			continue
 		}
@@ -467,13 +478,16 @@ func extractWorldZipToStaging(zipPath, stagingDir string) (stagedWorld, error) {
 			if !validWorldName(world) || !allowedWorldDirFile(base) {
 				continue
 			}
-			p, err := stage(f, "zippart-*")
-			if err != nil {
-				return fail(err)
-			}
 			if dirs[world] == nil {
 				dirs[world] = map[string]string{}
 				committed[world] = map[int][3]bool{}
+			}
+			if _, duplicate := dirs[world][base]; duplicate {
+				return stagedWorld{}, domain.Ef(domain.CodeValidationFailed, "duplicate world entry %q", base)
+			}
+			p, err := stage(f, "zippart-*")
+			if err != nil {
+				return stagedWorld{}, err
 			}
 			dirs[world][base] = p
 			if m := mainFilePattern.FindStringSubmatch(base); m != nil {
@@ -496,31 +510,34 @@ func extractWorldZipToStaging(zipPath, stagingDir string) (stagedWorld, error) {
 			continue
 		}
 		stem := strings.TrimSuffix(base, filepath.Ext(base))
-		p, err := stage(f, "zippart-*"+ext)
-		if err != nil {
-			return fail(err)
-		}
 		pr := pairs[stem]
 		if pr == nil {
 			pr = &pair{}
 			pairs[stem] = pr
 		}
-		if ext == ".db" {
-			pr.db = p
-		} else {
-			pr.fwl = p
+		part := &pr.db
+		if ext == ".fwl" {
+			part = &pr.fwl
 		}
+		if *part != "" {
+			return stagedWorld{}, domain.Ef(domain.CodeValidationFailed, "duplicate world entry %q", base)
+		}
+		p, err := stage(f, "zippart-*"+ext)
+		if err != nil {
+			return stagedWorld{}, err
+		}
+		*part = p
 	}
 
 	switch {
 	case len(pairs)+len(dirs) == 0:
-		return fail(domain.E(domain.CodeValidationFailed, "zip does not contain a world (a .db + .fwl pair, or a world directory with _main.<N>.db2/.fwl2/.ok files)"))
+		return stagedWorld{}, domain.E(domain.CodeValidationFailed, "zip does not contain a world (a .db + .fwl pair, or a world directory with _main.<N>.db2/.fwl2/.ok files)")
 	case len(pairs)+len(dirs) > 1:
-		return fail(domain.E(domain.CodeValidationFailed, "zip must contain exactly one world"))
+		return stagedWorld{}, domain.E(domain.CodeValidationFailed, "zip must contain exactly one world")
 	}
 	for stem, pr := range pairs {
 		if pr.db == "" || pr.fwl == "" {
-			return fail(domain.E(domain.CodeValidationFailed, "zip is missing the .db or .fwl file"))
+			return stagedWorld{}, domain.E(domain.CodeValidationFailed, "zip is missing the .db or .fwl file")
 		}
 		return stagedWorld{Name: stem, DB: pr.db, FWL: pr.fwl}, nil
 	}
@@ -532,11 +549,11 @@ func extractWorldZipToStaging(zipPath, stagingDir string) (stagedWorld, error) {
 			}
 		}
 		if !ok {
-			return fail(domain.E(domain.CodeValidationFailed, "world directory has no committed save (_main.<N>.db2, .fwl2 and .ok for the same N)"))
+			return stagedWorld{}, domain.E(domain.CodeValidationFailed, "world directory has no committed save (_main.<N>.db2, .fwl2 and .ok for the same N)")
 		}
 		return stagedWorld{Name: world, DirFiles: files}, nil
 	}
-	return fail(domain.E(domain.CodeValidationFailed, "empty zip"))
+	return stagedWorld{}, domain.E(domain.CodeValidationFailed, "empty zip")
 }
 
 // writeWorldZip streams save's files (whichever exist, either layout) into

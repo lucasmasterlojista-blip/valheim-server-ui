@@ -442,6 +442,90 @@ func TestModsAPI_ExportProfile(t *testing.T) {
 	}
 }
 
+func TestModsAPI_CompareProfile(t *testing.T) {
+	a := newModsTestAPI(t)
+	createModsTestInstance(t, a, "main")
+
+	install := a.do(t, http.MethodPost, "/api/v1/instances/main/mods", map[string]any{"owner": "Alice", "name": "CoreLib"})
+	if install.Code != http.StatusAccepted {
+		t.Fatalf("install: expected 202, got %d: %s", install.Code, install.Body.String())
+	}
+	var jobResp struct{ Job domain.Job }
+	if err := json.Unmarshal(install.Body.Bytes(), &jobResp); err != nil {
+		t.Fatal(err)
+	}
+	a.waitJob(t, jobResp.Job.ID)
+	before := a.do(t, http.MethodGet, "/api/v1/instances/main/mods", nil).Body.String()
+
+	archive, _, err := mods.BuildR2Profile("Team", []domain.Mod{
+		{Owner: "Alice", Name: "CoreLib", Source: domain.ModSourceThunderstore, Version: "2.0.0", Enabled: false},
+	}, []domain.ConfigFile{{Name: "example.cfg", Raw: "private-value"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, instance, filename string
+		files, status            int
+	}{
+		{name: "compares .R2Z", instance: "main", filename: "Team.R2Z", files: 1, status: http.StatusOK},
+		{name: "compares .zip", instance: "main", filename: "Team.zip", files: 1, status: http.StatusOK},
+		{name: "unknown instance", instance: "missing", filename: "Team.r2z", files: 1, status: http.StatusNotFound},
+		{name: "wrong extension", instance: "main", filename: "Team.rar", files: 1, status: http.StatusUnprocessableEntity},
+		{name: "two files", instance: "main", filename: "Team.r2z", files: 2, status: http.StatusUnprocessableEntity},
+		{name: "no file", instance: "main", filename: "Team.r2z", files: 0, status: http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body bytes.Buffer
+			mw := multipart.NewWriter(&body)
+			for range tc.files {
+				part, err := mw.CreateFormFile("file", tc.filename)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := part.Write(archive); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := mw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/instances/"+tc.instance+"/mods/compare", &body)
+			req.Header.Set("Content-Type", mw.FormDataContentType())
+			req.Header.Set(CSRFHeader, CSRFHeaderValue)
+			rec := httptest.NewRecorder()
+			a.handler.ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.status != http.StatusOK {
+				return
+			}
+			if strings.Contains(rec.Body.String(), "private-value") {
+				t.Fatal("comparison exposed a client configuration file")
+			}
+			var result domain.ModProfileComparison
+			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.ProfileName != "Team" || result.Matched != 0 || len(result.Differences) != 1 {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+			difference := result.Differences[0]
+			if difference.Name != "Alice-CoreLib" || strings.Join(difference.Reasons, ",") != "version,enabled" ||
+				difference.Profile == nil || *difference.Profile != (domain.ModProfileEntry{Version: "2.0.0"}) ||
+				difference.Server == nil || *difference.Server != (domain.ModProfileEntry{Version: "1.0.0", Enabled: true}) {
+				t.Fatalf("unexpected difference: %+v", difference)
+			}
+		})
+	}
+
+	after := a.do(t, http.MethodGet, "/api/v1/instances/main/mods", nil).Body.String()
+	if before != after {
+		t.Fatalf("comparison changed installed mods: before %s, after %s", before, after)
+	}
+}
+
 func TestModsAPI_BepInExRequiresInstalledToEnable(t *testing.T) {
 	a := newModsTestAPI(t)
 	createModsTestInstance(t, a, "main")

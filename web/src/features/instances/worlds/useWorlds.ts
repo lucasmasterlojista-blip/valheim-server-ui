@@ -1,7 +1,7 @@
 // Query hooks for the worlds tab.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../../api/client'
-import type { Instance, InstanceConfig, Job, World } from '../../../api/types'
+import type { Instance, InstanceConfig, Job, Schemas, World } from '../../../api/types'
 import { useJobDrawer } from '../../jobs'
 import { notifyError, notifySuccess } from '../../../lib/notify'
 
@@ -73,14 +73,26 @@ export function useRegenerateWorld(id: string) {
   })
 }
 
+function worldUploadForm(files: File[]) {
+  const form = new FormData()
+  files.forEach((file) => form.append('files', file))
+  return form
+}
+
+export function usePreviewWorldImport(id: string) {
+  return useMutation({
+    mutationFn: (files: File[]) =>
+      api.upload<Schemas['WorldImportPreview']>(`/instances/${id}/worlds/preview`, worldUploadForm(files)),
+  })
+}
+
 /** POST /instances/{id}/worlds (multipart) → 202 Job, opened in the job drawer. */
 export function useUploadWorlds(id: string) {
   const qc = useQueryClient()
   const { openJob } = useJobDrawer()
   return useMutation({
     mutationFn: ({ files, overwrite }: { files: File[]; overwrite: boolean }) => {
-      const form = new FormData()
-      files.forEach((f) => form.append('files', f))
+      const form = worldUploadForm(files)
       form.append('overwrite', String(overwrite))
       return api.upload<{ job: Job }>(`/instances/${id}/worlds`, form)
     },

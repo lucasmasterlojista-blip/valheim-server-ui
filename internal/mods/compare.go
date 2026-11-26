@@ -53,6 +53,10 @@ func readProfileManifest(r io.Reader) (*profileManifest, error) {
 	if len(data) > maxModProfileBytes {
 		return nil, profileValidation("mod profile ZIP must be 8 MiB or smaller")
 	}
+	return parseProfileManifest(data)
+}
+
+func parseProfileManifest(data []byte) (*profileManifest, error) {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, profileValidation("file is not a valid mod profile ZIP")
@@ -212,6 +216,10 @@ func (s *Service) CompareProfile(ctx context.Context, instanceID string, r io.Re
 	if err != nil {
 		return nil, err
 	}
+	return s.compareProfileManifest(ctx, instanceID, inst, profile)
+}
+
+func (s *Service) compareProfileManifest(ctx context.Context, instanceID string, inst *domain.Instance, profile *profileManifest) (*domain.ModProfileComparison, error) {
 	installed, err := s.listModRows(ctx, instanceID)
 	if err != nil {
 		return nil, err

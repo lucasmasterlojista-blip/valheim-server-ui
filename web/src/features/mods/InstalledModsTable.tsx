@@ -16,22 +16,26 @@ import {
   List,
   Loader,
   Popover,
+  SegmentedControl,
   Skeleton,
   Stack,
   Switch,
   Text,
+  TextInput,
   Tooltip,
 } from '@mantine/core'
 import { modals } from '@mantine/modals'
-import { IconExternalLink, IconPackage, IconRefresh, IconTrash } from '@tabler/icons-react'
+import { IconExternalLink, IconPackage, IconRefresh, IconSearch, IconTrash } from '@tabler/icons-react'
 import { useAuth } from '../../auth/useAuth'
 import { useJobDrawer } from '../jobs'
 import type { Mod } from '../../api/types'
 import { Dash, DataTable, EmptyState, SectionCard } from '../../ui'
 import type { DataTableColumn } from '../../ui'
-import { useExportModProfile, useModsOverview, useSetModEnabled, useUninstallMod, useUpdateMod } from './useMods'
+import { useModsOverview, useSetModEnabled, useUninstallMod, useUpdateMod } from './useMods'
 import { useConfigFiles } from './useModConfig'
 import { matchModConfigs } from './helpers'
+
+type ModStatusFilter = 'all' | 'enabled' | 'disabled'
 
 export function InstalledModsTable({ id, actions }: { id: string; actions?: ReactNode }) {
   const { hasRole } = useAuth()
@@ -41,13 +45,19 @@ export function InstalledModsTable({ id, actions }: { id: string; actions?: Reac
   const updateMod = useUpdateMod(id)
   const uninstallMod = useUninstallMod(id)
   const configFiles = useConfigFiles(id)
-  const exportProfile = useExportModProfile(id)
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState<ModStatusFilter>('all')
   const [updatingAll, setUpdatingAll] = useState(false)
 
   const canOperate = hasRole('operator')
   const bepinexInstalled = !!overview.data?.bepinex.installed
   const mods = overview.data?.mods ?? []
   const updatable = mods.filter((m) => m.update_available)
+  const term = search.trim().toLowerCase()
+  const matchingMods = mods.filter((mod) =>
+    (status === 'all' || mod.enabled === (status === 'enabled')) &&
+    `${mod.owner} ${mod.name} ${mod.owner}-${mod.name}`.toLowerCase().includes(term),
+  )
 
   function confirmUninstall(mod: Mod) {
     const candidates = matchModConfigs(mod, configFiles.data ?? [])
@@ -116,8 +126,14 @@ export function InstalledModsTable({ id, actions }: { id: string; actions?: Reac
       header: 'Mod',
       render: (mod) => (
         <Group gap="xs" wrap="nowrap">
-          <Avatar src={mod.icon_url || undefined} size="sm" radius="sm">
-            <IconPackage size={14} />
+          <Avatar
+            src={mod.icon_url && /^https:\/\//i.test(mod.icon_url) ? mod.icon_url : undefined}
+            alt=""
+            imageProps={{ loading: 'lazy', referrerPolicy: 'no-referrer' }}
+            size={38}
+            radius="sm"
+          >
+            <IconPackage size={17} />
           </Avatar>
           <div>
             <Group gap={4}>
@@ -214,24 +230,38 @@ export function InstalledModsTable({ id, actions }: { id: string; actions?: Reac
               Update all ({updatable.length})
             </Button>
           )}
-          <Button
-            size="xs"
-            variant="default"
-            loading={exportProfile.isPending}
-            onClick={() => exportProfile.mutate()}
-          >
-            Export client profile
-          </Button>
         </Group>
       }
       flush
     >
+      {mods.length > 0 && (
+        <Group px="md" py="sm" gap="sm">
+          <TextInput
+            aria-label="Search installed mods"
+            placeholder="Search by mod or author"
+            leftSection={<IconSearch size={16} />}
+            value={search}
+            onChange={(event) => setSearch(event.currentTarget.value)}
+            flex="1 1 220px"
+          />
+          <SegmentedControl<ModStatusFilter>
+            aria-label="Filter installed mods by status"
+            value={status}
+            onChange={setStatus}
+            data={[
+              { label: 'All', value: 'all' },
+              { label: 'Enabled', value: 'enabled' },
+              { label: 'Disabled', value: 'disabled' },
+            ]}
+          />
+        </Group>
+      )}
       <DataTable
         columns={columns}
-        rows={mods}
+        rows={matchingMods}
         rowKey={(mod) => mod.id}
         minWidth={720}
-        empty={<EmptyState icon={<IconPackage size={22} />} title="No mods installed yet. Browse Thunderstore or upload a mod below." />}
+        empty={<EmptyState icon={<IconPackage size={22} />} title={mods.length > 0 ? 'No installed mods match the filters.' : 'No mods installed yet. Browse Thunderstore or upload a mod below.'} />}
         actions={
           canOperate
             ? (mod) => (

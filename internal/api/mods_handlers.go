@@ -31,6 +31,8 @@ func registerModRoutes(r chi.Router, d *Deps) {
 		Get("/instances/{instanceId}/mods/export", exportModProfileHandler(d))
 	r.With(RequireRole(domain.RoleOperator), guard).
 		Post("/instances/{instanceId}/mods/compare", compareModProfileHandler(d))
+	r.With(RequireRole(domain.RoleOperator), guard).
+		Post("/instances/{instanceId}/mods/profile-install", installProfileSelectionHandler(d))
 
 	r.With(RequireRole(domain.RoleOperator), guard).
 		Post("/instances/{instanceId}/mods/bepinex", installBepInExHandler(d))
@@ -160,8 +162,22 @@ func compareModProfileHandler(d *Deps) http.HandlerFunc {
 		}
 		defer func() { _ = r.MultipartForm.RemoveAll() }()
 		files := r.MultipartForm.File["file"]
+		codes := r.MultipartForm.Value["code"]
+		if len(codes) != 0 {
+			if len(codes) != 1 || len(files) != 0 {
+				WriteValidation(w, domain.FieldError{Field: "code", Message: "choose a profile file or enter one share code"})
+				return
+			}
+			result, err := d.Mods.CompareProfileCode(r.Context(), id, codes[0])
+			if err != nil {
+				WriteError(w, err)
+				return
+			}
+			WriteJSON(w, http.StatusOK, result)
+			return
+		}
 		if len(files) != 1 {
-			WriteValidation(w, domain.FieldError{Field: "file", Message: "choose one mod profile ZIP"})
+			WriteValidation(w, domain.FieldError{Field: "file", Message: "choose one mod profile ZIP or enter a share code"})
 			return
 		}
 		ext := strings.ToLower(filepath.Ext(files[0].Filename))

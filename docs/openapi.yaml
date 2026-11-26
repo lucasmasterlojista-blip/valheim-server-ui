@@ -1588,9 +1588,10 @@ paths:
       operationId: compareModProfile
       summary: Compare an exported client profile with the installed Thunderstore mods
       description: >
-        Reads export.r2x from a local .r2z or .zip profile archive up to 8 MiB.
-        The profile entry is limited to 1 MiB uncompressed. Configuration files
-        and unsupported providers are ignored. No mods or configuration change.
+        Accepts either one .r2z or .zip profile archive up to 8 MiB or a
+        Thunderstore profile share code. Reads export.r2x up to 1 MiB.
+        Configuration files and unsupported providers are ignored. This
+        operation makes no changes to the instance.
       x-role: operator
       parameters: [{ $ref: '#/components/parameters/instanceId' }]
       requestBody:
@@ -1599,9 +1600,12 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
+              oneOf:
+                - required: [file]
+                - required: [code]
               properties:
                 file: { type: string, format: binary }
+                code: { type: string, format: uuid }
       responses:
         '200':
           description: Read-only comparison of versions and enabled states
@@ -1611,6 +1615,31 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /instances/{instanceId}/mods/profile-install:
+    post:
+      tags: [mods]
+      operationId: installModProfileSelection
+      summary: Install the selected missing Thunderstore mods at their exact versions
+      description: >
+        Queues a single job for operator-selected mods from a profile. Existing
+        mod selections are skipped. The normal dependency resolver applies.
+        Profile configuration files are not applied.
+      x-role: operator
+      parameters: [{ $ref: '#/components/parameters/instanceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModProfileInstallRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/JobResponse' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
 
   # ------------------------------------------------------------------ thunderstore
@@ -2514,6 +2543,21 @@ components:
         id: { type: string }
         name: { type: string }
 
+    ModProfileInstallRequest:
+      type: object
+      required: [packages]
+      properties:
+        packages:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            type: object
+            required: [owner, name, version]
+            properties:
+              owner: { type: string }
+              name: { type: string }
+              version: { type: string }
     ModProfileComparison:
       type: object
       required: [profile_name, matched, differences, skipped_server_mods, skipped_profile_mods]

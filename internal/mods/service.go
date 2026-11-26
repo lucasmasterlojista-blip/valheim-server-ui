@@ -97,13 +97,43 @@ func (s *Service) Overview(ctx context.Context, instanceID string) (*domain.Mods
 				latest = v
 			}
 		}
-		mods = append(mods, r.toDomain(latest))
+		mod := r.toDomain(latest)
+		if mod.IconURL == "" && r.Source != domain.ModSourceManual {
+			mod.IconURL = s.cachedModIcon(r)
+		}
+		mods = append(mods, mod)
 	}
 	return &domain.ModsOverview{
 		BepInEx:        bepinexStatus(inst.Paths, inst.Config.BepInExEnabled, s.regs.Default()),
 		Mods:           mods,
 		PendingRestart: inst.Status.PendingRestart,
 	}, nil
+}
+
+// cachedModIcon fills missing artwork from the installed mod's own registry.
+// If that version has no icon, use the newest available one for the same package.
+func (s *Service) cachedModIcon(mod modRow) string {
+	registry, ok := s.regs.Lookup(string(mod.Source))
+	if !ok {
+		return ""
+	}
+	pkg, ok := registry.lookup(mod.Owner, mod.Name)
+	if !ok {
+		return ""
+	}
+	var fallback string
+	for _, version := range pkg.raw.Versions {
+		if version.Icon == "" {
+			continue
+		}
+		if version.VersionNumber == mod.Version {
+			return version.Icon
+		}
+		if fallback == "" {
+			fallback = version.Icon
+		}
+	}
+	return fallback
 }
 
 // AgentBundle provides the manager's own server plugin package (see

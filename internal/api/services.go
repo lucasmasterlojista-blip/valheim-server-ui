@@ -160,6 +160,8 @@ type ModService interface {
 	// profile (not from Thunderstore, or an unparseable version).
 	ExportProfile(ctx context.Context, instanceID string) ([]byte, []string, error)
 	CompareProfile(ctx context.Context, instanceID string, r io.Reader) (*domain.ModProfileComparison, error)
+	CompareProfileCode(ctx context.Context, instanceID, code string) (*domain.ModProfileComparison, error)
+	EnqueueProfileInstall(ctx context.Context, instanceID string, packages []domain.ProfilePackage, requestedBy string) (*domain.Job, error)
 }
 
 // WP-08

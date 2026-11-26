@@ -8,7 +8,7 @@ import { useAuth } from '../../auth/useAuth'
 import { GameplayCard } from '../gameplay'
 import {
   CheckModUpdatesButton,
-  CompareModProfileCard,
+  ModProfilesCard,
   ConfigEditor,
   InstalledModsTable,
   ModLoaderCard,
@@ -29,6 +29,13 @@ export function ModsTab({ id }: { id: string }) {
 
   return (
     <Stack gap="md">
+      <ModProfilesCard
+        key={id}
+        id={id}
+        canImport={hasRole('operator')}
+        bepinexInstalled={!!overview.data?.bepinex.installed}
+        installedMods={overview.data?.mods ?? []}
+      />
       <ModLoaderCard id={id} />
 
       <GameplayCard id={id} />
@@ -47,12 +54,7 @@ export function ModsTab({ id }: { id: string }) {
         }
       />
 
-      {hasRole('operator') && (
-        <>
-          <CompareModProfileCard key={id} id={id} />
-          <UploadModCard id={id} />
-        </>
-      )}
+      {hasRole('operator') && <UploadModCard id={id} />}
 
       <ConfigEditor id={id} />
 

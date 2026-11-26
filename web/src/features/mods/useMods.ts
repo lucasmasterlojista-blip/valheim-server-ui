@@ -150,16 +150,30 @@ export function useExportModProfile(id: string) {
 
 export function useCompareModProfile(id: string) {
   return useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: (input: File | string) => {
       const form = new FormData()
-      form.set('file', file)
+      form.set(typeof input === 'string' ? 'code' : 'file', input)
       return api.upload<Schemas['ModProfileComparison']>(`/instances/${id}/mods/compare`, form)
     },
     onSuccess: () => notifySuccess('Client profile compared'),
     onError: (err) => {
-      if (!(err instanceof ApiError) || !err.fieldErrors().file) {
-        notifyError(err, 'Could not compare client profile')
+      const fields = err instanceof ApiError ? err.fieldErrors() : {}
+      if (!fields.file && !fields.code) {
+        notifyError(err, 'Could not preview mod profile')
       }
     },
+  })
+}
+
+export function useInstallProfileSelection(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Schemas['ModProfileInstallRequest']) =>
+      api.post<{ job: Job }>(`/instances/${id}/mods/profile-install`, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['instances', id, 'mods'] })
+      notifySuccess('Profile install queued')
+    },
+    onError: (err) => notifyError(err, 'Could not queue profile installation'),
   })
 }

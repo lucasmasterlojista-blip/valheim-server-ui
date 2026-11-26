@@ -3702,9 +3702,29 @@ export interface paths {
         put?: never;
         /**
          * Compare an exported client profile with the installed Thunderstore mods
-         * @description Reads export.r2x from a local .r2z or .zip profile archive up to 8 MiB. The profile entry is limited to 1 MiB uncompressed. Configuration files and unsupported providers are ignored. No mods or configuration change.
+         * @description Accepts either one .r2z or .zip profile archive up to 8 MiB or a Thunderstore profile share code. Reads export.r2x up to 1 MiB. Configuration files and unsupported providers are ignored. This operation makes no changes to the instance.
          */
         post: operations["compareModProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{instanceId}/mods/profile-install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Install the selected missing Thunderstore mods at their exact versions
+         * @description Queues a single job for operator-selected mods from a profile. Existing mod selections are skipped. The normal dependency resolver applies. Profile configuration files are not applied.
+         */
+        post: operations["installModProfileSelection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4783,6 +4803,13 @@ export interface components {
             id: string;
             name: string;
         };
+        ModProfileInstallRequest: {
+            packages: {
+                owner: string;
+                name: string;
+                version: string;
+            }[];
+        };
         ModProfileComparison: {
             profile_name: string;
             matched: number;
@@ -5449,8 +5476,10 @@ export interface operations {
             content: {
                 "multipart/form-data": {
                     /** Format: binary */
-                    file: string;
-                };
+                    file?: string;
+                    /** Format: uuid */
+                    code?: string;
+                } & (unknown | unknown);
             };
         };
         responses: {
@@ -5466,6 +5495,30 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            502: components["responses"]["Error"];
+        };
+    };
+    installModProfileSelection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: components["parameters"]["instanceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModProfileInstallRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["JobResponse"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };

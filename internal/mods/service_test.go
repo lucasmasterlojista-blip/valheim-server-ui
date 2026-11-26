@@ -81,6 +81,66 @@ func mustSucceed(t *testing.T, runner *jobs.Runner, jobID string) *domain.Job {
 	return job
 }
 
+func TestOverviewUsesSourceCatalogForMissingIcons(t *testing.T) {
+	const (
+		current = "https://gcdn.thunderstore.io/current.png"
+		old     = "https://gcdn.thunderstore.io/old.png"
+		other   = "https://cdn.hexium.gg/other.png"
+		saved   = "https://gcdn.thunderstore.io/saved.png"
+	)
+	tsPkg := onePkg("Alice", "CoreLib", "2.0.0", "1.0.0")
+	tsPkg.Versions[0].Icon = current
+	tsPkg.Versions[1].Icon = old
+	hxPkg := onePkg("Alice", "CoreLib", "3.0.0", "1.0.0")
+	hxPkg.Versions[0].Icon = other
+	hxOnly := onePkg("Alice", "Other", "1.0.0")
+	hxOnly.Versions[0].Icon = other
+	ts := seedClient(domain.RegistryThunderstoreID, tsPkg)
+	hx := seedClient(domain.RegistryHexiumID, hxPkg, hxOnly)
+
+	for _, tc := range []struct {
+		name    string
+		source  domain.ModSource
+		mod     string
+		version string
+		saved   string
+		want    string
+	}{
+		{name: "installed version and case-insensitive identity", source: domain.ModSourceThunderstore, mod: "corelib", version: "1.0.0", want: old},
+		{name: "fallback to icon from same package", source: domain.ModSourceThunderstore, mod: "CoreLib", version: "0.9.0", want: current},
+		{name: "exact version has no icon", source: domain.ModSourceHexium, mod: "CoreLib", version: "1.0.0", want: other},
+		{name: "stored icon takes precedence", source: domain.ModSourceThunderstore, mod: "CoreLib", version: "1.0.0", saved: saved, want: saved},
+		{name: "missing from source catalog", source: domain.ModSourceThunderstore, mod: "Other", version: "1.0.0"},
+		{name: "manual mod with matching name", source: domain.ModSourceManual, mod: "CoreLib", version: "1.0.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, inst, _, _ := newTestModsService(t, ts)
+			svc.regs = NewRegistries(ts, hx)
+			createTestInstance(t, inst, "main")
+
+			id, err := svc.insertModRow(ctx, modRow{
+				InstanceID: "main", Source: tc.source, Owner: "ALICE", Name: tc.mod,
+				Version: tc.version, IconURL: tc.saved, InstalledAt: time.Now(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			overview, err := svc.Overview(ctx, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(overview.Mods) != 1 || overview.Mods[0].IconURL != tc.want {
+				t.Fatalf("Overview mods = %+v, want icon %q", overview.Mods, tc.want)
+			}
+			row, err := svc.getModRow(ctx, "main", id)
+			if err != nil || row.IconURL != tc.saved {
+				t.Fatalf("Overview changed the stored icon to %q, error %v", row.IconURL, err)
+			}
+		})
+	}
+}
+
 func TestEnqueueInstall_WithDependenciesProducesExpectedTree(t *testing.T) {
 	ts, _ := newMiniThunderstore(t)
 	modSvc, instSvc, _, runner := newTestModsService(t, ts)

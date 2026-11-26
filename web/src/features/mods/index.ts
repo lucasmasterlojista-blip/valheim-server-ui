@@ -2,7 +2,7 @@
 export { ModLoaderCard } from './ModLoaderCard'
 export { InstalledModsTable } from './InstalledModsTable'
 export { UploadModCard } from './UploadModCard'
-export { CompareModProfileCard } from './CompareModProfileCard'
+export { ModProfilesCard } from './ModProfilesCard'
 export { ThunderstoreBrowser } from './ThunderstoreBrowser'
 export { ConfigEditor } from './ConfigEditor'
 export { CheckModUpdatesButton } from './CheckModUpdatesButton'

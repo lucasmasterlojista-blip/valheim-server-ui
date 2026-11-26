@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -101,6 +102,19 @@ type modsTestAPI struct {
 	runner  *jobs.Runner
 }
 
+const modsTestProfileCode = "0190f03b-11d2-8769-a053-a30d30c4336a"
+
+func buildTestProfileZip(t *testing.T) []byte {
+	t.Helper()
+	archive, _, err := mods.BuildR2Profile("Team", []domain.Mod{
+		{Owner: "Alice", Name: "CoreLib", Source: domain.ModSourceThunderstore, Version: "2.0.0", Enabled: false},
+	}, []domain.ConfigFile{{Name: "example.cfg", Raw: "private-value"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return archive
+}
+
 func newModsTestAPI(t *testing.T) *modsTestAPI {
 	t.Helper()
 	ctx := context.Background()
@@ -130,6 +144,7 @@ func newModsTestAPI(t *testing.T) *modsTestAPI {
 		}},
 	}
 	zipBytes := buildTestModZip(t)
+	profileBytes := buildTestProfileZip(t)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/c/valheim/api/v1/package/", func(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +152,12 @@ func newModsTestAPI(t *testing.T) *modsTestAPI {
 	})
 	mux.HandleFunc("/package/download/Alice/CoreLib/1.0.0/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(zipBytes)
+	})
+	mux.HandleFunc("/api/experimental/legacyprofile/get/"+modsTestProfileCode+"/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://ccdn.thunderstore.io/live/modpacks/legacyprofile/"+modsTestProfileCode, http.StatusFound)
+	})
+	mux.HandleFunc("/live/modpacks/legacyprofile/"+modsTestProfileCode, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "#r2modman\n"+base64.StdEncoding.EncodeToString(profileBytes))
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -457,19 +478,20 @@ func TestModsAPI_CompareProfile(t *testing.T) {
 	a.waitJob(t, jobResp.Job.ID)
 	before := a.do(t, http.MethodGet, "/api/v1/instances/main/mods", nil).Body.String()
 
-	archive, _, err := mods.BuildR2Profile("Team", []domain.Mod{
-		{Owner: "Alice", Name: "CoreLib", Source: domain.ModSourceThunderstore, Version: "2.0.0", Enabled: false},
-	}, []domain.ConfigFile{{Name: "example.cfg", Raw: "private-value"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	archive := buildTestProfileZip(t)
 
 	for _, tc := range []struct {
 		name, instance, filename string
+		codes                    []string
 		files, status            int
 	}{
 		{name: "compares .R2Z", instance: "main", filename: "Team.R2Z", files: 1, status: http.StatusOK},
 		{name: "compares .zip", instance: "main", filename: "Team.zip", files: 1, status: http.StatusOK},
+		{name: "compares share code", instance: "main", codes: []string{" " + strings.ToUpper(modsTestProfileCode) + " "}, status: http.StatusOK},
+		{name: "missing share code", instance: "main", codes: []string{"0190f03b-11d2-8769-a053-a30d30c4336b"}, status: http.StatusUnprocessableEntity},
+		{name: "invalid share code", instance: "main", codes: []string{"https://thunderstore.io/"}, status: http.StatusUnprocessableEntity},
+		{name: "file and code", instance: "main", filename: "Team.r2z", files: 1, codes: []string{modsTestProfileCode}, status: http.StatusUnprocessableEntity},
+		{name: "two codes", instance: "main", codes: []string{modsTestProfileCode, modsTestProfileCode}, status: http.StatusUnprocessableEntity},
 		{name: "unknown instance", instance: "missing", filename: "Team.r2z", files: 1, status: http.StatusNotFound},
 		{name: "wrong extension", instance: "main", filename: "Team.rar", files: 1, status: http.StatusUnprocessableEntity},
 		{name: "two files", instance: "main", filename: "Team.r2z", files: 2, status: http.StatusUnprocessableEntity},
@@ -484,6 +506,11 @@ func TestModsAPI_CompareProfile(t *testing.T) {
 					t.Fatal(err)
 				}
 				if _, err := part.Write(archive); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, code := range tc.codes {
+				if err := mw.WriteField("code", code); err != nil {
 					t.Fatal(err)
 				}
 			}

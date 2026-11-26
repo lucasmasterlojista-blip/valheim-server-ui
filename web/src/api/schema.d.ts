@@ -1971,7 +1971,10 @@ export interface paths {
             };
         };
         put?: never;
-        /** Upload a world (.db + .fwl files, or one zip containing them) */
+        /**
+         * Upload a Valheim world from ZIP or matching legacy files
+         * @description Upload one ZIP containing a complete Valheim 1.0 world folder with its _main and chunk files, or a matching legacy .db and .fwl pair. A ZIP containing a legacy pair is also supported.
+         */
         post: {
             parameters: {
                 query?: never;

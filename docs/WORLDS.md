@@ -52,7 +52,7 @@ is nothing to back up or download.
 | **Regenerate** (active world only) | Takes a backup, deletes the world's files, and lets Valheim generate a fresh world with the **same name and a new random seed**. | The instance is stopped for the swap and started again if it was running; players are disconnected for the minute or two generation takes. Instance settings, mods and lists are untouched. |
 | **Delete** (inactive worlds only) | Removes the world's files, including Valheim's rolling copies. | None; the running world is never the target. |
 | **Download** | Zip of the world: the whole directory, or the legacy `.db` and `.fwl`. | None. |
-| **Upload** | Import a legacy `.db`+`.fwl` pair, or a zip containing either a pair or a world directory (`<name>/_main.<N>.*` plus chunks). Overwriting replaces the existing world completely, in both layouts. Refuses to overwrite the active world while the server runs. | None until you make it active and restart. |
+| **Upload** | Choose **ZIP archive** to upload the complete Valheim 1.0 world folder in one ZIP, including all `_main` and `.chunk` files. Choose **Legacy files** to select matching `.db` and `.fwl` files. A ZIP of a legacy pair is also accepted. Overwriting replaces the existing world completely, in both layouts. Refuses to overwrite the active world while the server runs. | None until you make it active and restart. |
 
 Regenerate and Delete open a confirmation dialog that describes the effect and
 only enables the button after you type the world name exactly. Regenerate
